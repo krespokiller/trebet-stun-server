@@ -1,4 +1,3 @@
-const stun = require('node-stun');
 const dgram = require('dgram');
 const os = require('os');
 const Message = require('node-stun/lib/message');
@@ -18,39 +17,47 @@ function getLocalIPv4() {
 }
 
 const localIP = getLocalIPv4();
+const PORT = process.env.PORT || 19302;
+const ALT_PORT = process.env.ALT_PORT || 19303;
+
 console.log('IP local detectada:', localIP);
+console.log(`Servidor STUN corriendo en puertos ${PORT} y ${ALT_PORT}`);
+console.log('Nota: STUN requiere IP pública directa, tunnelmole no es recomendado');
 
 let isServerRunning = false;
 
 function startServer() {
     try {
-        // Crear servidor UDP directamente para más control
         const primarySocket = dgram.createSocket('udp4');
         const secondarySocket = dgram.createSocket('udp4');
 
-        primarySocket.on('message', (msg, rinfo) => {
+        const handleStunMessage = (socket, msg, rinfo) => {
             try {
                 const request = new Message();
                 request.deserialize(msg);
                 
-                // Crear respuesta STUN
                 const response = new Message();
                 response.init();
-                response._type = 0x0101;  // Binding Response (257 en decimal)
-                response._tid = request._tid;
+                response.setType('bres'); // Binding Response
+                response.setTransactionId(request.getTransactionId());
                 
-                // Simplificar a solo mappedAddr con el formato correcto
+                // Solo usar los atributos soportados por la librería
                 response.addAttribute('mappedAddr', {
                     family: 'ipv4',
                     port: rinfo.port,
                     addr: rinfo.address
                 });
 
-                // Enviar respuesta
+                response.addAttribute('changedAddr', {
+                    family: 'ipv4',
+                    port: socket.address().port === PORT ? ALT_PORT : PORT,
+                    addr: localIP
+                });
+
                 const responsePacket = response.serialize();
-                primarySocket.send(responsePacket, 0, responsePacket.length, rinfo.port, rinfo.address, (err) => {
+                socket.send(responsePacket, 0, responsePacket.length, rinfo.port, rinfo.address, (err) => {
                     if (err) {
-                        console.error('Error al enviar respuesta:', err);
+                        console.error('Error enviando respuesta:', err);
                     } else {
                         console.log(`Respuesta STUN enviada a ${rinfo.address}:${rinfo.port}`);
                     }
@@ -58,20 +65,20 @@ function startServer() {
             } catch (error) {
                 console.error('Error procesando mensaje STUN:', error);
             }
-        });
+        };
 
+        primarySocket.on('message', (msg, rinfo) => handleStunMessage(primarySocket, msg, rinfo));
         primarySocket.on('listening', () => {
-            const address = primarySocket.address();
-            console.log(`Servidor STUN escuchando en ${address.address}:${address.port}`);
+            console.log(`Servidor STUN principal escuchando en puerto ${PORT}`);
         });
 
-        primarySocket.on('error', (error) => {
-            console.error('Error en socket primario:', error);
+        secondarySocket.on('message', (msg, rinfo) => handleStunMessage(secondarySocket, msg, rinfo));
+        secondarySocket.on('listening', () => {
+            console.log(`Servidor STUN secundario escuchando en puerto ${ALT_PORT}`);
         });
 
-        // Vincular sockets a puertos específicos
-        primarySocket.bind(19302, localIP);
-        secondarySocket.bind(19303, localIP);
+        primarySocket.bind(PORT);
+        secondarySocket.bind(ALT_PORT);
 
         return { primarySocket, secondarySocket };
     } catch (error) {
@@ -82,7 +89,7 @@ function startServer() {
     }
 }
 
-const sockets = startServer();
+startServer();
 
 // Manejo de señales de terminación
 process.on('SIGINT', () => {
