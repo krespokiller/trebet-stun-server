@@ -1,42 +1,23 @@
-const stun = require('node-stun');
 const turn = require('node-turn');
+const os = require('os');
 
-const SERVER_PORT = 3478; // Puerto estándar STUN
-const SERVER_HOST = '0.0.0.0';
-
-const stunServer = stun.createServer({
-    primary: {
-        host: SERVER_HOST,
-        port: SERVER_PORT
-    },
-    secondary: {
-        host: SERVER_HOST,
-        port: SERVER_PORT + 1
+// Función para obtener IP privada
+function getPrivateIP() {
+    const interfaces = os.networkInterfaces();
+    for (const iface of Object.values(interfaces)) {
+        for (const alias of iface) {
+            if (alias.family === 'IPv4' && !alias.internal) {
+                return alias.address;
+            }
+        }
     }
-});
+    return '0.0.0.0';
+}
 
-// Configurar eventos del servidor STUN
-stunServer.on('bindingRequest', (request, rinfo) => {
-    console.log(`Solicitud STUN recibida desde ${rinfo.address}:${rinfo.port}`);
-});
+const PRIVATE_IP = getPrivateIP();
+const TURN_PORT = 8081;
 
-stunServer.on('error', (err) => {
-    console.error('Error en servidor STUN:', err);
-});
-
-// Iniciar el servidor STUN
-stunServer.listen(SERVER_PORT, SERVER_HOST, () => {
-    console.log(`Servidor STUN ejecutándose en ${SERVER_HOST}:${SERVER_PORT}`);
-});
-
-// Manejo de señales para cierre limpio
-process.on('SIGINT', () => {
-    console.log('Cerrando servidor STUN...');
-    stunServer.close(() => {
-        process.exit(0);
-    });
-});
-
+// Configuración del servidor TURN
 const turnServer = new turn({
     // Configuración básica
     authMech: 'long-term',
@@ -46,21 +27,30 @@ const turnServer = new turn({
     },
     realm: 'turnserver',
     
-    // Puertos
-    listeningPort: 3478,        // Puerto STUN/TURN
+    // Puertos y IPs
+    listeningPort: TURN_PORT,
+    listeningIps: [PRIVATE_IP], // Usar IP privada
     relayPortRange: {
-        min: 49152,             // Puerto mínimo para relay
-        max: 65535              // Puerto máximo para relay
+        min: 49152,
+        max: 65535
     },
     
     // Configuración de logging
-    debugLevel: 'INFO',
-    
-    // Opcional: certificados para TURN sobre TLS
-    cert: 'path/to/cert.pem',
-    key: 'path/to/key.pem',
+    debugLevel: 'ALL', // Aumentar nivel de logging para debug
 });
 
 turnServer.start();
 
-console.log('Servidor STUN/TURN iniciado en puerto 3478');
+console.log(`Servidor TURN ejecutándose en ${PRIVATE_IP}:${TURN_PORT}`);
+console.log('IP privada detectada:', PRIVATE_IP);
+
+// Manejo de errores
+turnServer.on('error', (err) => {
+    console.error('Error en servidor TURN:', err);
+});
+
+// Manejo de señales para cierre limpio
+process.on('SIGINT', () => {
+    console.log('Cerrando servidor TURN...');
+    process.exit(0);
+});
