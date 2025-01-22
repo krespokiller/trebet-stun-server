@@ -1,107 +1,62 @@
-const dgram = require('dgram');
-const os = require('os');
-const Message = require('node-stun/lib/message');
+const stun = require('node-stun');
+const turn = require('node-turn');
 
-// Obtener la primera dirección IPv4 no interna
-function getLocalIPv4() {
-    const interfaces = os.networkInterfaces();
-    for (const ifname of Object.keys(interfaces)) {
-        for (const iface of interfaces[ifname]) {
-            // Saltamos las direcciones internas y no IPv4
-            if (iface.family === 'IPv4' && !iface.internal) {
-                return iface.address;
-            }
-        }
+const SERVER_PORT = 3478; // Puerto estándar STUN
+const SERVER_HOST = '0.0.0.0';
+
+const stunServer = stun.createServer({
+    primary: {
+        host: SERVER_HOST,
+        port: SERVER_PORT
     }
-    return '0.0.0.0';
-}
+});
 
-const localIP = getLocalIPv4();
-const PORT = process.env.PORT || 19302;
-const ALT_PORT = process.env.ALT_PORT || 19303;
+// Configurar eventos del servidor STUN
+stunServer.on('bindingRequest', (request, rinfo) => {
+    console.log(`Solicitud STUN recibida desde ${rinfo.address}:${rinfo.port}`);
+});
 
-console.log('IP local detectada:', localIP);
-console.log(`Servidor STUN corriendo en puertos ${PORT} y ${ALT_PORT}`);
-console.log('Nota: STUN requiere IP pública directa, tunnelmole no es recomendado');
+stunServer.on('error', (err) => {
+    console.error('Error en servidor STUN:', err);
+});
 
-let isServerRunning = false;
+// Iniciar el servidor STUN
+stunServer.listen(SERVER_PORT, SERVER_HOST, () => {
+    console.log(`Servidor STUN ejecutándose en ${SERVER_HOST}:${SERVER_PORT}`);
+});
 
-function startServer() {
-    try {
-        const primarySocket = dgram.createSocket('udp4');
-        const secondarySocket = dgram.createSocket('udp4');
-
-        const handleStunMessage = (socket, msg, rinfo) => {
-            try {
-                const request = new Message();
-                request.deserialize(msg);
-                
-                const response = new Message();
-                response.init();
-                response.setType('bres'); // Binding Response
-                response.setTransactionId(request.getTransactionId());
-                
-                // Solo usar los atributos soportados por la librería
-                response.addAttribute('mappedAddr', {
-                    family: 'ipv4',
-                    port: rinfo.port,
-                    addr: rinfo.address
-                });
-
-                response.addAttribute('changedAddr', {
-                    family: 'ipv4',
-                    port: socket.address().port === PORT ? ALT_PORT : PORT,
-                    addr: localIP
-                });
-
-                const responsePacket = response.serialize();
-                socket.send(responsePacket, 0, responsePacket.length, rinfo.port, rinfo.address, (err) => {
-                    if (err) {
-                        console.error('Error enviando respuesta:', err);
-                    } else {
-                        console.log(`Respuesta STUN enviada a ${rinfo.address}:${rinfo.port}`);
-                    }
-                });
-            } catch (error) {
-                console.error('Error procesando mensaje STUN:', error);
-            }
-        };
-
-        primarySocket.on('message', (msg, rinfo) => handleStunMessage(primarySocket, msg, rinfo));
-        primarySocket.on('listening', () => {
-            console.log(`Servidor STUN principal escuchando en puerto ${PORT}`);
-        });
-
-        secondarySocket.on('message', (msg, rinfo) => handleStunMessage(secondarySocket, msg, rinfo));
-        secondarySocket.on('listening', () => {
-            console.log(`Servidor STUN secundario escuchando en puerto ${ALT_PORT}`);
-        });
-
-        primarySocket.bind(PORT);
-        secondarySocket.bind(ALT_PORT);
-
-        return { primarySocket, secondarySocket };
-    } catch (error) {
-        console.error('Error al iniciar el servidor:', error);
-        console.log('Reintentando en 3 segundos...');
-        setTimeout(startServer, 3000);
-        return null;
-    }
-}
-
-startServer();
-
-// Manejo de señales de terminación
+// Manejo de señales para cierre limpio
 process.on('SIGINT', () => {
-    console.log('Señal SIGINT recibida. Manteniendo servidor activo.');
+    console.log('Cerrando servidor STUN...');
+    stunServer.close(() => {
+        process.exit(0);
+    });
 });
 
-process.on('SIGTERM', () => {
-    console.log('Señal SIGTERM recibida. Manteniendo servidor activo.');
+const turnServer = new turn({
+    // Configuración básica
+    authMech: 'long-term',
+    credentials: {
+        username: "krespoturn",
+        password: "krespo123"
+    },
+    realm: 'turnserver',
+    
+    // Puertos
+    listeningPort: 3478,        // Puerto STUN/TURN
+    relayPortRange: {
+        min: 49152,             // Puerto mínimo para relay
+        max: 65535              // Puerto máximo para relay
+    },
+    
+    // Configuración de logging
+    debugLevel: 'INFO',
+    
+    // Opcional: certificados para TURN sobre TLS
+    cert: 'path/to/cert.pem',
+    key: 'path/to/key.pem',
 });
 
-// Manejo de errores no capturados
-process.on('uncaughtException', (error) => {
-    console.error('Error no capturado:', error);
-    process.exit(1);
-});
+turnServer.start();
+
+console.log('Servidor TURN iniciado en puerto 3478');
