@@ -8,6 +8,10 @@ const stunServer = stun.createServer({
     primary: {
         host: SERVER_HOST,
         port: SERVER_PORT
+    },
+    secondary: {
+        host: SERVER_HOST,
+        port: SERVER_PORT + 1
     }
 });
 
@@ -59,4 +63,4 @@ const turnServer = new turn({
 
 turnServer.start();
 
-console.log('Servidor TURN iniciado en puerto 3478');
+console.log('Servidor STUN/TURN iniciado en puerto 3478');
